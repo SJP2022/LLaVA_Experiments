@@ -1,0 +1,9 @@
+[2024-08-06 21:36:05,933] [INFO] [real_accelerator.py:161:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+6 llava loaded.
+6 pool built.
+ZUM89wyBcYY started with gpu 4 at 2024-08-06 21:38:08.
+M1J3XjExaW4 started with gpu 0 at 2024-08-06 21:38:08.
+gwKy0W1xof4 started with gpu 2 at 2024-08-06 21:38:08.
+XKwodc1MriQ started with gpu 1 at 2024-08-06 21:38:08.
+MNSDK-vCwTM started with gpu 5 at 2024-08-06 21:38:08.
+6yD5jZn6SEs started with gpu 3 at 2024-08-06 21:38:08.

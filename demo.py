@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import random
+import time
 import torch
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
@@ -21,6 +22,13 @@ from io import BytesIO
 from transformers import TextStreamer
 from decord import VideoReader
 
+class QuietTextStreamer(TextStreamer):
+    def put(self, value):
+        pass
+    def on_finalized_text(self, text, stream_end):
+        pass
+    def end(self):
+        pass
 
 def load_image(image_file):
     if image_file.startswith('http://') or image_file.startswith('https://'):
@@ -32,7 +40,7 @@ def load_image(image_file):
 
 frames_root = "/share/test/chengfeng/ActivityNet_frames"
 video_root = "/share/common/VideoDatasets/ActivityNet/videos"
-framecaps_root = "framecaps_root"
+framecaps_root = "/share/test/shijiapeng/ActivityNet_annotations_24_8/ActivityNet_frames2Caption_llava1.6"
 
 def get_duration(video_path):
     vr = VideoReader(video_path)
@@ -46,7 +54,7 @@ def captioning(vid):
         print("%s exists." % vid)
         return
 
-    print("%s starts." % vid)
+    print("%s starts at %s" % (vid, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())))
 
     framecaps = []
 
@@ -92,7 +100,7 @@ def captioning(vid):
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
-        streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        streamer = QuietTextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
         with torch.inference_mode():
             output_ids = model.generate(
@@ -120,7 +128,7 @@ def captioning(vid):
     with open(json_path, "w") as f:
         json.dump(save_item, f)
 
-    print("%s finished." % vid)
+    print("%s finished at %s" % (vid, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())))
 
 def main(args):
     # Model

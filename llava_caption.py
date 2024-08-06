@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import random
+import time
 import torch
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
@@ -22,6 +23,14 @@ from decord import VideoReader
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import torch
+
+class QuietTextStreamer(TextStreamer):
+    def put(self, value):
+        pass
+    def on_finalized_text(self, text, stream_end):
+        pass
+    def end(self):
+        pass
 
 frames_root = "/share/test/chengfeng/ActivityNet_frames"
 video_root = "/share/common/VideoDatasets/ActivityNet/videos"
@@ -51,7 +60,7 @@ def captioning(gpu_id, vid):
         return
 
     #线程开始
-    print("%s started with gpu %d." % (vid, gpu_id)) 
+    print("%s started with gpu %d at %s." % (vid, gpu_id, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))) 
 
     model = models[gpu_id]
     image_processor = image_processors[gpu_id]
@@ -100,7 +109,7 @@ def captioning(gpu_id, vid):
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
-        streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, quiet=True)
+        streamer = QuietTextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
         with torch.inference_mode():
             output_ids = model.generate(
@@ -129,7 +138,7 @@ def captioning(gpu_id, vid):
         json.dump(save_item, f)
 
     #线程结束
-    print("%s finished with gpu %d." % (vid, gpu_id)) 
+    print("%s finished with gpu %d  at %s." % (vid, gpu_id, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))) 
 
 def main(args):
     # Model
