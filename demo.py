@@ -1,5 +1,5 @@
 '''
-python demo.py --model-path llava-v1.6-vicuna-13b --load-4bit
+python demo.py --model-path llava-v1.6-vicuna-7b --load-4bit
 '''
 import argparse
 import json
@@ -7,6 +7,7 @@ import os
 import random
 import time
 import torch
+import cv2
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
@@ -38,9 +39,29 @@ def load_image(image_file):
         image = Image.open(image_file).convert('RGB')
     return image
 
-frames_root = "/share/test/chengfeng/ActivityNet_frames"
+def load_video(video_path, frame_idx):
+    vr = VideoReader(video_path, ctx=cpu(0))
+    start_frame = round(start_time*vr.get_avg_fps())
+    end_frame = min(round(end_time*vr.get_avg_fps()), len(vr))
+    fps = round(vr.get_avg_fps())
+    frame_idx = [i for i in range(start_frame, end_frame, fps)]
+    # sample_fps = args.for_get_frames_num if total_frame_num > args.for_get_frames_num else total_frame_num
+    if len(frame_idx) > args.for_get_frames_num or args.force_sample:
+        sample_fps = args.for_get_frames_num
+        uniform_sampled_frames = np.linspace(start_frame, end_frame - 1, sample_fps, dtype=int)
+        frame_idx = uniform_sampled_frames.tolist()
+    #print(start_time, end_time, frame_idx, len(vr))
+    spare_frames = vr.get_batch(frame_idx).asnumpy()
+    # Save frames as images
+    # for i, frame in enumerate(spare_frames):
+    #     cv2.imwrite(f'{args.output_dir}/frame_{i}.jpg', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+
+    return spare_frames
+
 video_root = "/share/common/VideoDatasets/ActivityNet/videos"
-framecaps_root = "/share/test/shijiapeng/ActivityNet_annotations_24_8/ActivityNet_frames2Caption_llava1.6"
+framecaps_root = "/share/test/shijiapeng/ActivityNet_annotations_24_8/ActivityNet_frames2Caption_llava1.6_7b"
+#framecaps_root = "/share/test/shijiapeng/ActivityNet_annotations_24_8/ActivityNet_frames2Caption_exp"
+shots_root = "/share/test/shijiapeng/ActivityNet_shots_final"
 
 def get_duration(video_path):
     vr = VideoReader(video_path)
@@ -59,64 +80,83 @@ def captioning(vid):
     framecaps = []
 
     video_path = os.path.join(video_root, vid+".mp4")
-    frames_path = os.path.join(frames_root, vid)
+    shots_path = os.path.join(shots_root, vid+".json")
     duration, fps = get_duration(video_path)
-    if not os.path.exists(frames_path):
-        print("frames of %s don't exist. Can't captioning!!!" % vid)
+    if os.path.exists(shots_path):
+        with open(shots_path, 'r', encoding='utf-8') as f:
+            shots = json.load(f) #list
+    else:
+        print("shots of %s don't exist. Can't summarize this video!!!" % vid)
         return
     
-    frames = sorted(os.listdir(frames_path))
-    for img in frames:
-        img_path = os.path.join(frames_path, img)
-        #settings
-        #user_content = "Please write a caption for this photo. Write only short sentences. Describe only one action per sentence." 
-        #user_content = "Please write a caption for this photo." 
-        #user_content = "a photo of"
-        user_content = "Describe this photo in detail. Include details like object counts, position of the objects, relative position between the objects. Always answer as if you are directly looking at the image."
-        conv = new_chat()
-        inp = user_content
+    cnt = len(shots)-1
+    start_times = []
+    end_times = []
+    for idx in range(cnt):
+        start_times.append(shots[idx])
+        end_times.append(shots[idx+1])
+    cap = cv2.VideoCapture(video_path)
+    for start_time, end_time in zip(start_times, end_times):
+        middle_sec = (start_time + end_time) // 2
+        middle_frame_idx = int(middle_sec * fps)
+        print(start_time, end_time, middle_frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, middle_frame_idx)
+        ret, frame = cap.read()
+            
+        if ret:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            user_content = "Please provide a detailed description of the photo, focusing on the main subjects, their actions, the background scenes."
+            conv = new_chat()
+            inp = user_content
 
-        image = load_image(img_path)
-        image_size = image.size
-        # Similar operation in model_worker.py
-        image_tensor = process_images([image], image_processor, model.config)
-        if type(image_tensor) is list:
-            image_tensor = [image.to(model.device, dtype=torch.float16) for image in image_tensor]
-        else:
-            image_tensor = image_tensor.to(model.device, dtype=torch.float16)
-
-        if image is not None:
-            # first message
-            if model.config.mm_use_im_start_end:
-                inp = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + inp
+            image = Image.fromarray(frame)
+            image_size = image.size
+            # Similar operation in model_worker.py
+            image_tensor = process_images([image], image_processor, model.config)
+            if type(image_tensor) is list:
+                image_tensor = [image.to(model.device, dtype=torch.float16) for image in image_tensor]
             else:
-                inp = DEFAULT_IMAGE_TOKEN + '\n' + inp
-            image = None
-        
-        conv.append_message(conv.roles[0], inp)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
+                image_tensor = image_tensor.to(model.device, dtype=torch.float16)
 
-        input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
-        stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-        keywords = [stop_str]
-        streamer = QuietTextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+            if image is not None:
+                # first message
+                if model.config.mm_use_im_start_end:
+                    inp = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + inp
+                else:
+                    inp = DEFAULT_IMAGE_TOKEN + '\n' + inp
+                image = None
+            
+            conv.append_message(conv.roles[0], inp)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
 
-        with torch.inference_mode():
-            output_ids = model.generate(
-                input_ids,
-                images=image_tensor,
-                image_sizes=[image_size],
-                do_sample=True if args.temperature > 0 else False,
-                temperature=args.temperature,
-                max_new_tokens=args.max_new_tokens,
-                streamer=streamer,
-                use_cache=True)
+            input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            keywords = [stop_str]
+            streamer = QuietTextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
-        outputs = tokenizer.decode(output_ids[0]).strip()
-        caption = outputs.replace("<s>", "").replace("</s>", "").strip()
-        #print(caption)
-        framecaps.append(caption)
+            with torch.inference_mode():
+                output_ids = model.generate(
+                    input_ids,
+                    images=image_tensor,
+                    image_sizes=[image_size],
+                    do_sample=True if args.temperature > 0 else False,
+                    temperature=args.temperature,
+                    max_new_tokens=args.max_new_tokens,
+                    streamer=streamer,
+                    use_cache=True)
+
+            outputs = tokenizer.decode(output_ids[0]).strip()
+            caption = outputs.replace("<s>", "").replace("</s>", "").strip()
+            print(caption)
+            #framecaps.append(caption)
+            framecaps.append({
+                "id": idx,
+                "start_time": start_time,
+                "end_time": end_time,
+                "captions": caption
+            })
+    cap.release()
 
     save_item = {
         "video_name": "v_"+vid,
@@ -170,7 +210,7 @@ def main(args):
             videos[i] = videos[i][:-4]
     random.shuffle(videos)
     
-    #videos = ['00SfeRtiM2o']
+    #videos = ['WOUkPgHtt4E']
     #videos = ['2zVpWu1i5qM']
     #videos = ['0AjYz-s4Rek']
     #videos = ['sFKOnFMJF2Q']
@@ -178,6 +218,12 @@ def main(args):
     #videos = ['37Q3so6ERxs']
     for vid in videos:
         captioning(vid)
+        with open(os.path.join(framecaps_root, 'v_'+vid+'.json'), 'r', encoding='utf-8') as f:
+            nota = json.load(f) #list
+        for item in nota['captions']:
+            if item['captions']=='':
+                print("%s doesn't work!" % vid)
+                break
 
     print("all finished!")
 
